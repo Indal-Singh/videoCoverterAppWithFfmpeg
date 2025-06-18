@@ -8,6 +8,7 @@ const cron = require('node-cron');
 const { v4: uuidv4 } = require('uuid');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const sharp = require('sharp');
 
 const app = express();
 const httpServer = createServer(app);
@@ -173,6 +174,112 @@ app.post('/convert', upload.array('videos', 10), async (req, res) => {
             } catch (error) {
                 console.error(`Error converting file ${file.originalname}:`, error);
                 socket.emit('conversion-error', {
+                    fileId,
+                    fileName: file.originalname,
+                    error: error.message
+                });
+            }
+            
+            currentFile++;
+        }
+
+        // Send final response
+        res.json({ 
+            success: true, 
+            message: 'All files processed',
+            results: results
+        });
+
+    } catch (error) {
+        console.error('Error in conversion process:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+// Handle image conversion
+app.post('/convert-image', upload.array('images', 10), async (req, res) => {
+    try {
+        if (!req.files || req.files.length === 0) {
+            return res.status(400).json({ success: false, error: 'No files uploaded' });
+        }
+
+        const targetSize = parseFloat(req.body.targetSize) || 1; // Default to 1MB
+        const socketId = req.body.socketId;
+        const socket = io.sockets.sockets.get(socketId);
+
+        if (!socket) {
+            return res.status(400).json({ success: false, error: 'Socket connection not found' });
+        }
+
+        const results = [];
+        let currentFile = 1;
+        const totalFiles = req.files.length;
+
+        for (const file of req.files) {
+            const fileId = file.originalname.replace(/[^a-zA-Z0-9]/g, '_');
+            const outputPath = path.join(__dirname, 'uploads', `converted-${fileId}.jpg`);
+            
+            // Emit conversion start event
+            socket.emit('image-conversion-start', {
+                fileId,
+                fileName: file.originalname,
+                currentFile,
+                totalFiles
+            });
+
+            try {
+                // Get original file size in MB
+                const stats = fs.statSync(file.path);
+                const originalSizeMB = stats.size / (1024 * 1024);
+                
+                // Calculate initial quality based on target size
+                let quality = Math.min(80, Math.floor((targetSize / originalSizeMB) * 80));
+                quality = Math.max(10, quality); // Don't go below 10% quality
+
+                // Convert image with initial quality
+                await sharp(file.path)
+                    .jpeg({ quality: quality })
+                    .toFile(outputPath)
+                    .then(async (info) => {
+                        // Check if we need to adjust quality
+                        const outputStats = fs.statSync(outputPath);
+                        const outputSizeMB = outputStats.size / (1024 * 1024);
+                        
+                        // If output is still too large, try to reduce quality further
+                        if (outputSizeMB > targetSize) {
+                            const newQuality = Math.floor((targetSize / outputSizeMB) * quality);
+                            await sharp(file.path)
+                                .jpeg({ quality: Math.max(10, newQuality) })
+                                .toFile(outputPath);
+                        }
+
+                        const downloadUrl = `/download/${path.basename(outputPath)}`;
+                        results.push({
+                            originalName: file.originalname,
+                            downloadUrl: downloadUrl
+                        });
+                        
+                        socket.emit('image-conversion-complete', {
+                            fileId,
+                            fileName: file.originalname,
+                            downloadUrl: downloadUrl,
+                            currentFile,
+                            totalFiles
+                        });
+                    })
+                    .catch(err => {
+                        throw err;
+                    });
+
+                // Clean up original file
+                fs.unlinkSync(file.path);
+                
+            } catch (error) {
+                console.error(`Error converting file ${file.originalname}:`, error);
+                socket.emit('image-conversion-error', {
                     fileId,
                     fileName: file.originalname,
                     error: error.message
