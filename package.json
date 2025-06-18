@@ -1,0 +1,24 @@
+{
+  "name": "videocoverterappwithffmpeg",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js --host 0.0.0.0",
+    "dev": "nodemon index.js --host 0.0.0.0"
+  },
+  "author": "",
+  "license": "ISC",
+  "description": "Video converter application using FFmpeg",
+  "dependencies": {
+    "express": "^4.18.2",
+    "fluent-ffmpeg": "^2.1.2",
+    "multer": "^1.4.5-lts.1",
+    "cors": "^2.8.5",
+    "node-cron": "^3.0.3",
+    "uuid": "^9.0.1",
+    "socket.io": "^4.7.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.2"
+  }
+}

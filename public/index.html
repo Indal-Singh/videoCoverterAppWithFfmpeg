@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Converter</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="/socket.io/socket.io.js"></script>
+    <style>
+        .drop-zone {
+            border: 2px dashed #4a5568;
+            transition: all 0.3s ease;
+        }
+        .drop-zone.dragover {
+            border-color: #4299e1;
+            background-color: #ebf8ff;
+        }
+        .file-item {
+            transition: all 0.3s ease;
+        }
+        .file-item:hover {
+            background-color: #f7fafc;
+        }
+        .progress-bar {
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 min-h-screen">
+    <div class="container mx-auto px-4 py-8">
+        <div class="max-w-2xl mx-auto">
+            <h1 class="text-3xl font-bold text-center mb-8 text-gray-800">Video Converter</h1>
+            
+            <div class="bg-white rounded-lg shadow-lg p-6">
+                <div id="dropZone" class="drop-zone rounded-lg p-8 text-center cursor-pointer mb-6">
+                    <div class="space-y-4">
+                        <svg class="mx-auto h-12 w-12 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                        </svg>
+                        <p class="text-gray-600">Drag and drop your videos here, or click to select</p>
+                        <p class="text-sm text-gray-500">You can select multiple files (up to 10)</p>
+                        <input type="file" id="fileInput" class="hidden" accept="video/*" multiple>
+                    </div>
+                </div>
+
+                <div class="mb-6">
+                    <label class="block text-gray-700 text-sm font-bold mb-2" for="targetSize">
+                        Target Size (MB)
+                    </label>
+                    <input type="number" id="targetSize" 
+                           class="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+                           value="10" min="1" max="1000">
+                </div>
+
+                <div id="fileList" class="space-y-4 mb-6">
+                    <!-- File items will be added here -->
+                </div>
+
+                <div id="downloadContainer" class="hidden space-y-4">
+                    <h3 class="text-lg font-semibold text-gray-700">Converted Videos</h3>
+                    <div id="downloadList" class="space-y-2">
+                        <!-- Download links will be added here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const socket = io();
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const targetSize = document.getElementById('targetSize');
+        const fileList = document.getElementById('fileList');
+        const downloadContainer = document.getElementById('downloadContainer');
+        const downloadList = document.getElementById('downloadList');
+
+        // Map to store file items by their ID
+        const fileItems = new Map();
+
+        // Socket.IO event handlers
+        socket.on('connect', () => {
+            console.log('Connected to server with ID:', socket.id);
+        });
+
+        socket.on('conversion-start', (data) => {
+            console.log('Conversion started:', data);
+            const fileId = data.fileName.replace(/[^a-zA-Z0-9]/g, '_');
+            const fileItem = fileItems.get(fileId);
+            if (fileItem) {
+                const progressText = fileItem.element.querySelector('.progress-text');
+                progressText.textContent = `Starting conversion (File ${data.currentFile} of ${data.totalFiles})...`;
+            }
+        });
+
+        socket.on('conversion-progress', (data) => {
+            const fileId = data.fileName.replace(/[^a-zA-Z0-9]/g, '_');
+            const fileItem = fileItems.get(fileId);
+            if (fileItem) {
+                console.log('Progress update:', data);
+                const progressBar = fileItem.element.querySelector('.progress-bar');
+                const progressText = fileItem.element.querySelector('.progress-text');
+                
+                progressBar.style.width = `${data.progress}%`;
+                progressText.textContent = `Converting: ${data.progress}% (File ${data.currentFile} of ${data.totalFiles})`;
+            }
+        });
+
+        socket.on('conversion-complete', (data) => {
+            console.log('Conversion complete:', data);
+            const fileId = data.fileName.replace(/[^a-zA-Z0-9]/g, '_');
+            const fileItem = fileItems.get(fileId);
+            if (fileItem) {
+                const progressBar = fileItem.element.querySelector('.progress-bar');
+                const progressText = fileItem.element.querySelector('.progress-text');
+                
+                progressBar.style.width = '100%';
+                progressText.textContent = 'Complete!';
+                
+                // Show download container if it's hidden
+                downloadContainer.classList.remove('hidden');
+                
+                // Create and append download item
+                const downloadItem = createDownloadItem(data.fileName, data.downloadUrl);
+                downloadList.appendChild(downloadItem);
+                
+                // Remove the file item from the list after successful conversion
+                setTimeout(() => {
+                    fileItem.element.remove();
+                }, 2000);
+            }
+        });
+
+        socket.on('conversion-error', (data) => {
+            console.error('Conversion error:', data);
+            const fileId = data.fileName.replace(/[^a-zA-Z0-9]/g, '_');
+            const fileItem = fileItems.get(fileId);
+            if (fileItem) {
+                const progressText = fileItem.element.querySelector('.progress-text');
+                progressText.textContent = `Error: ${data.error}`;
+                progressText.classList.add('text-red-500');
+            }
+        });
+
+        function createFileItem(file) {
+            const div = document.createElement('div');
+            div.className = 'file-item bg-gray-50 rounded p-4';
+            div.innerHTML = `
+                <div class="flex items-center justify-between">
+                    <div class="flex-1">
+                        <p class="text-sm font-medium text-gray-700 truncate">${file.name}</p>
+                        <div class="w-full bg-gray-200 rounded-full h-2.5 mt-2">
+                            <div class="progress-bar bg-blue-600 h-2.5 rounded-full" style="width: 0%"></div>
+                        </div>
+                        <p class="progress-text text-xs text-gray-500 mt-1">Waiting...</p>
+                    </div>
+                </div>
+            `;
+            return div;
+        }
+
+        function createDownloadItem(originalName, downloadUrl) {
+            const div = document.createElement('div');
+            div.className = 'flex items-center justify-between bg-green-50 rounded p-3 mb-2';
+            div.innerHTML = `
+                <div class="flex-1">
+                    <span class="text-sm text-gray-700 truncate">${originalName}</span>
+                    <p class="text-xs text-gray-500">Click download to save the converted file</p>
+                </div>
+                <a href="${downloadUrl}" 
+                   class="ml-4 bg-green-500 text-white text-sm font-bold py-2 px-4 rounded hover:bg-green-600 transition-colors"
+                   download>
+                    Download
+                </a>
+            `;
+            return div;
+        }
+
+        function handleFiles(files) {
+            if (files.length > 10) {
+                alert('You can only upload up to 10 files at once');
+                return;
+            }
+
+            // Clear previous results
+            fileList.innerHTML = '';
+            downloadContainer.classList.add('hidden');
+            downloadList.innerHTML = '';
+            fileItems.clear();
+
+            // Create file items
+            Array.from(files).forEach(file => {
+                if (!file.type.startsWith('video/')) {
+                    alert(`File "${file.name}" is not a video file`);
+                    return;
+                }
+                const fileItem = createFileItem(file);
+                fileList.appendChild(fileItem);
+                // Store the file item with the original filename as ID
+                const fileId = file.name.replace(/[^a-zA-Z0-9]/g, '_');
+                fileItems.set(fileId, { element: fileItem, file });
+            });
+
+            // Prepare form data
+            const formData = new FormData();
+            Array.from(files).forEach(file => {
+                formData.append('videos', file);
+            });
+            formData.append('targetSize', targetSize.value);
+            formData.append('socketId', socket.id);
+
+            // Send the request
+            fetch('/convert', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (!data.success) {
+                    throw new Error(data.error || 'Conversion failed');
+                }
+            })
+            .catch(error => {
+                alert('Error uploading files: ' + error.message);
+            });
+        }
+
+        // Drag and drop handlers
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFiles(files);
+            }
+        });
+
+        dropZone.addEventListener('click', () => {
+            fileInput.click();
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFiles(e.target.files);
+            }
+        });
+    </script>
+</body>
+</html> 
